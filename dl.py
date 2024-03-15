@@ -1,72 +1,65 @@
-import numpy as np
-from sklearn.model_selection import train_test_split
+import numpy as np 
+import pandas as pd 
+from sklearn.model_selection import train_test_split 
 from sklearn.preprocessing import StandardScaler
-from tensorflow import keras
-from keras.models import Sequential
-from keras.layers import Dense, Dropout
+import keras 
+from keras.models import Sequential 
+from keras.layers import Dense, Dropout, BatchNormalization
 from keras.optimizers import Adam
-from keras.callbacks import ReduceLROnPlateau, EarlyStopping
-from keras.utils import to_categorical
-import pandas as pd
+from keras.callbacks import EarlyStopping
+import kerastuner as kt
+import tensorflow as tf
 
-# Assuming your dataset is loaded into X, y
-# Placeholder for dataset loading
-# X, y = load_your_data()
 train = pd.read_csv("dataset/train.csv")
 test = pd.read_csv("dataset/test.csv")
-
 x_train = train[["AI_Interaction_Level", "Satisfaction_with_AI_Services"]]
 x_test = test[["AI_Interaction_Level", "Satisfaction_with_AI_Services"]]
 y_train =train["Customer_Churn"]
 y_test = test["Customer_Churn"]
 
-# Split the dataset (this part is dependent on how you load/preprocess your data)
-
-
-# Data Preprocessing
+# Normalize features
 scaler = StandardScaler()
-x_train_scaled = scaler.fit_transform(x_train)
-x_test_scaled = scaler.transform(x_test)
+x_train = scaler.fit_transform(x_train)
+x_test = scaler.transform(x_test)
 
-# Convert labels to categorical
-y_train_cat = to_categorical(y_train)
-y_test_cat = to_categorical(y_test)
-
-# Define the model building function
-def build_model(learning_rate=0.001, units=160, dropout_rate=0.4):
-    model = Sequential([
-        Dense(units, activation='relu', input_shape=(x_train_scaled.shape[1],)),
-        Dropout(dropout_rate),
-        Dense(units // 2, activation='relu'),
-        Dropout(dropout_rate / 2),
-        Dense(2, activation='softmax')
-    ])
+def model_builder(hp):
+    model = keras.Sequential()
+    model.add(keras.layers.Flatten(input_shape=(28, 28)))
     
-    optimizer = Adam(learning_rate=learning_rate)
-    model.compile(optimizer=optimizer, loss='categorical_crossentropy', metrics=['accuracy'])
+    # Tune the number of units in the first Dense layer
+    # Choose an optimal value between 32-512
+    hp_units = hp.Int('units', min_value=32, max_value=512, step=32)
+    model.add(keras.layers.Dense(units=hp_units, activation='relu'))
+    model.add(keras.layers.Dense(10))
+
+    # Tune the learning rate for the optimizer
+    hp_learning_rate = hp.Choice('learning_rate', values=[1e-2, 1e-3, 1e-4])
+
+    model.compile(optimizer=keras.optimizers.Adam(learning_rate=hp_learning_rate),
+                  loss=keras.losses.SparseCategoricalCrossentropy(from_logits=True),
+                  metrics=['accuracy'])
+
     return model
 
-# Build the model
-model = build_model()
+tuner = kt.Hyperband(model_builder,
+                     objective='val_accuracy',
+                     max_epochs=10,
+                     factor=3,
+                     directory='my_dir',
+                     project_name='intro_to_kt')
 
-# Callbacks
-reduce_lr = ReduceLROnPlateau(monitor='val_loss', factor=0.2, patience=5, min_lr=0.0001)
-early_stopping = EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True)
+# Early stopping callback to prevent overfitting
+stop_early = tf.keras.callbacks.EarlyStopping(monitor='val_loss', patience=5)
 
-# Train the model
-history = model.fit(
-    x_train_scaled, y_train_cat, 
-    epochs=100, 
-    batch_size=32, 
-    validation_split=0.2, 
-    callbacks=[reduce_lr, early_stopping],
-    verbose=2
-)
+# Assuming you have your training and validation data ready in x_train, y_train, x_val, y_val
+tuner.search(x_train, y_train, epochs=50, validation_data=(x_test, y_test), callbacks=[stop_early])
 
-# Evaluate the model
-test_loss, test_accuracy = model.evaluate(x_test_scaled, y_test_cat, verbose=0)
-print(f"Test Accuracy: {test_accuracy:.2%}")
+# Get the optimal hyperparameters
+best_hps = tuner.get_best_hyperparameters(num_trials=1)[0]
 
-
-
+print(f"""
+The hyperparameter search is complete. The optimal number of units in the first densely-connected
+layer is {best_hps.get('units')} and the optimal learning rate for the optimizer
+is {best_hps.get('learning_rate')}.
+""")
 
